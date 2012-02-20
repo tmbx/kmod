@@ -1,0 +1,456 @@
+#!/usr/bin/perl -w
+
+### This program replays the transactions that occurred between 'kmod' and a
+### plugin. The program expects the path to the interactions log as its first
+### argument. If "-n" is specified as the second argument, then 'kmod' won't be
+### executed (it is expected that it is already running). The program sends each
+### input command to 'kmod' and validates that the commands returned by 'kmod'
+### match the commands recorded in the log. The program verifies that
+### instructions and integers match exactly, but does not check if strings match
+### exactly since they can change eventually. The 'kmod' program must be in the
+### current working directory.
+
+
+############################################################
+use strict;
+use Socket;
+use Getopt::Std;
+
+### Current script mode: input or output.
+my $MODE_INPUT = 1;
+my $MODE_OUTPUT = 2;
+my $current_mode = $MODE_INPUT;
+
+### KMOD options.
+my $kmod_db_dir = "";
+my $kmod_port = 31000;
+
+### Script and KMOD streams.
+my $script_fd;
+my $kmod_fd;
+
+### KMOD process ID.
+my $kmod_pid;
+
+### Run the show.
+sub main
+{
+    my %options;
+    my $exec_kmod_flag = 1;
+    
+    if (! getopts("k:p:n", \%options) || @ARGV != 1)
+    {
+    	print_usage();
+    	exit(1);
+    }
+    
+    if(defined($options{'k'})) { $kmod_db_dir = $options{'k'}; }
+    if(defined($options{'p'})) { $kmod_port = $options{'p'}; }
+    if(defined($options{'n'})) { $exec_kmod_flag = 0; }
+       
+    ### Open script file.
+    open(INPUT_FILE, "<$ARGV[0]") || die("Cannot open $ARGV[0]: $!\n");
+    $script_fd = *INPUT_FILE{IO};
+    
+    ### Open connection with KMOD.
+    $kmod_fd = open_comm_with_kmod($exec_kmod_flag);
+   
+    ### Read commands.
+    my $char_buf = "";
+    
+    while(1)
+    {
+    	### Read one character.
+    	my $char;
+	
+	if(do_read($script_fd, \$char, 1) != 1)
+	{
+	    ### End of file reached prematurely.
+	    if($char_buf ne "")
+	    {
+	    	die("Incomplete command at end of file");
+	    }
+	    
+	    ### We're done.
+	    last;
+	}
+	
+	### Skip whitespaces, unless a command was entered.
+	if($char =~ /\s/)
+	{
+	    if($char_buf eq "")
+	    {
+	    	next;
+	    }
+	    
+	    die("Expected command after '$char_buf'");
+	}
+	
+	### Add character to buffer.
+	$char_buf .= $char;
+	
+	### Switch to input mode.
+	if($char_buf eq "INPUT>")
+	{
+	    $current_mode = $MODE_INPUT;
+	    $char_buf = "";
+	}
+	
+	### Switch to output mode.
+	elsif($char_buf eq "OUTPUT>")
+	{
+	    $current_mode = $MODE_OUTPUT;
+	    $char_buf = "";
+	}
+	
+	### Process command.
+	elsif($char_buf eq "INS" || $char_buf eq "INT" || $char_buf eq "STR")
+	{
+    	    handle_one_script_cmd($char_buf);
+	    $char_buf = "";
+	}
+	
+	### No such command.
+	elsif(length($char_buf) > 6)
+	{
+	    die("Unknown command '$char_buf'");
+	}
+    }
+    
+    # Wait for KMOD to finish.
+    close($kmod_fd);
+    
+    if (wait() != $kmod_pid)
+    {
+    	die("Wait() failed: $!\n");
+    }
+}
+
+sub print_usage()
+{
+    print("Usage: $0 [-k db_dir] [-p port] [-n] <inter_log_path>\n");
+}
+
+### Process one script command, in either mode.
+sub handle_one_script_cmd
+{
+    my $cmd = $_[0];
+    
+    if($cmd eq "INS")
+    {
+    	my $val = read_one_ins($script_fd);
+	#print("Processing instruction command: $val\n");
+	
+	if($current_mode == $MODE_INPUT)
+	{
+	    send_to_kmod("INS$val");
+	}
+	
+	else
+	{
+	    recv_from_kmod($cmd, $val);
+	}
+    }
+    
+    elsif($cmd eq "INT")
+    {
+    	my $val = read_one_int($script_fd);
+	#print("Processing integer command: $val\n");
+	
+	if($current_mode == $MODE_INPUT)
+	{
+	    send_to_kmod("INT$val>");
+	}
+	
+	else
+	{
+	    recv_from_kmod($cmd, $val);
+	}
+    }
+    
+    elsif($cmd eq "STR")
+    {
+    	my $val = read_one_str($script_fd);
+	#print("Processing string command: $val\n");
+	
+	if($current_mode == $MODE_INPUT)
+	{
+	    send_to_kmod("STR" . length($val) . ">$val");
+	}
+	
+	else
+	{
+	    recv_from_kmod($cmd, $val);
+	}
+    }
+    
+    else
+    {
+    	die("Bad command '$cmd'");
+    }
+}
+
+### Read an instruction from a stream.
+sub read_one_ins
+{
+    my $fd = $_[0];
+    my $ins = "";
+    
+    if(do_read($fd, \$ins, 8) != 8)
+    {
+    	die("Incomplete instruction");
+    }
+    
+    return $ins;
+}
+
+### Read an integer from a stream.
+sub read_one_int
+{
+    my $fd = $_[0];
+    my $nb = "";
+    
+    while(1)
+    {
+    	my $char;
+	
+    	if(do_read($fd, \$char, 1) != 1)
+	{
+	    die("Incomplete int");
+	}
+	
+	if($char eq ">")
+	{
+	    return $nb;
+	}
+	
+	elsif($char >= '0' && $char <= '9')
+	{
+    	    $nb .= $char;
+	}
+	
+	else
+	{
+	    die("Bad char '$char' in integer");
+	}
+    }
+}
+
+### Read a string from a stream.
+sub read_one_str
+{
+    my $fd = $_[0];
+    my $nb = read_one_int($fd);
+    my $str;
+    
+    if(do_read($fd, \$str, $nb) != $nb)
+    {
+    	die("Incomplete string");
+    }
+    
+    return $str;
+}
+
+### Sent some data to KMOD.
+sub send_to_kmod
+{
+    my $val = $_[0];
+    #printf("Writing $val to KMOD.\n");
+    
+    if(syswrite($kmod_fd, $val, length($val)) != length($val))
+    {
+    	die("Cannot write data to KMOD: $!");
+    }
+}
+
+### Receive data from KMOD and validate.
+sub recv_from_kmod
+{
+    my $script_cmd = $_[0];
+    my $script_val = $_[1];
+    my $kmod_cmd;
+    my $kmod_val;
+  
+    if(do_read($kmod_fd, \$kmod_cmd, 3) != 3)
+    {
+    	die("Cannot read command from KMOD: $! (was expecting $script_cmd)");
+    }
+    
+    if($kmod_cmd eq "INS")
+    {
+    	$kmod_val = read_one_ins($kmod_fd);
+	#print("Receiving instruction from KMOD: $kmod_val\n");
+    }
+    
+    elsif($kmod_cmd eq "INT")
+    {
+    	$kmod_val = read_one_int($kmod_fd);
+	#print("Receiving integer from KMOD: $kmod_val\n");
+    }
+    
+    elsif($kmod_cmd eq "STR")
+    {
+    	$kmod_val = read_one_str($kmod_fd);
+	#print("Receiving string from KMOD: $kmod_val\n");
+    }
+    
+    else
+    	{
+	die("Received bad command from KMOD: '$kmod_cmd'");
+	}
+    
+    check_consistency($script_cmd, $script_val, $kmod_cmd, $kmod_val);
+}
+
+### Check that the command returned by KMOD matches the command we are expecting.
+sub check_consistency
+{
+    my $script_cmd = $_[0];
+    my $script_val = $_[1];
+    my $kmod_cmd = $_[2];
+    my $kmod_val = $_[3];
+    
+    ### Protocol is consistent so far.
+    if($script_cmd eq $kmod_cmd)
+    {
+    	### Validate for instruction and integers, but not for strings, since they can
+	### change a bit.
+    	if($script_cmd eq "INS" && $script_val ne $kmod_val)
+	{
+    	    print("Communication is out of sync.\n");
+	    print("The plugin is expecting instruction $script_val.\n");
+	    print("KMOD sent instruction $kmod_val.\n");
+	    exit(1);
+	}
+	
+	elsif($script_cmd eq "INT" && $script_val ne $kmod_val)
+	{
+	    print("Communication is out of sync.\n");
+	    print("The plugin is expecting integer $script_val.\n");
+	    print("KMOD sent integer $kmod_val.\n");
+	    exit(1);
+	}
+    }
+    
+    ### Oops.
+    else
+    {
+    	print("Communication is out of sync.\n");
+	    
+	if($script_cmd eq "INS")
+	{
+	    print("The plugin is expecting an instruction: $script_val.\n");
+	}
+
+	elsif($script_cmd eq "INT")
+	{
+	    print("The plugin is expecting an integer: $script_val.\n");
+	}
+
+	elsif($script_cmd eq "STR")
+	{
+	    print("The plugin is expecting a string: $script_val.\n");
+	}
+
+	if($kmod_cmd eq "INS")
+	{
+	    print("KMOD sent an instruction: $kmod_val.\n");
+	}
+
+	elsif($kmod_cmd eq "INT")
+	{
+	    print("KMOD sent an integer: $kmod_val.\n");
+	}
+
+	elsif($kmod_cmd eq "STR")
+	{
+	    print("KMOD sent a string: $kmod_val.\n");
+	}
+	    
+    	exit(1);
+    }
+}
+
+### Wrapper around read().
+sub do_read
+{
+    my $fd = $_[0];
+    my $data = $_[1];
+    my $count = $_[2];
+    my $ret = read($fd, $$data, $count);
+    if (! defined($ret)) { return 0; }
+    return $ret;
+}
+
+### Start KMOD and connect to it.
+### Arguments:
+### True if we must execute KMOD.
+sub open_comm_with_kmod
+{
+    my $exec_kmod_flag = $_[0];
+    
+    if($exec_kmod_flag)
+    {
+	### Fork to create the process.
+	my $pid = fork();
+
+	if(! defined($pid))
+	{
+    	    die("Cannot fork: $!");
+	}
+
+	### Child.
+	if(! $pid)
+	{
+    	    ### Execute KMOD with socket option.
+	    my $cmdline = "./kmod -C kpp_connect -p $kmod_port";
+	    
+	    if ($kmod_db_dir ne "")
+	    {
+	    	$cmdline .= " -k $kmod_db_dir";
+	    }
+	    
+	    exec($cmdline) || die("Cannot execute kmod: $!");
+	}
+	
+	# Parent.
+	else
+	{
+	    $kmod_pid = $pid;
+	}
+    }
+    
+    ### Open connection.
+    my $iaddr = inet_aton("127.0.0.1") ;
+    my $paddr = sockaddr_in($kmod_port, $iaddr);
+    my $proto = getprotobyname("tcp");
+           
+    socket(SOCK, PF_INET, SOCK_STREAM, $proto) || die("Cannot open socket: $!");
+    
+    ### Loop a bit until we connect or fail.
+    my $begin = time();
+    
+    while(1)
+    {
+    	my $result = connect(SOCK, $paddr);
+	
+	### We're connected.
+	if($result)
+    	{
+	    last;
+	}
+	
+	if(time() > $begin + 1)
+	{
+	    die("Cannot connect to kmod");
+	}
+	
+	select(undef, undef, undef, 0.001)
+    }
+   
+    return *SOCK{IO};
+}
+
+
+############################################################
+main();

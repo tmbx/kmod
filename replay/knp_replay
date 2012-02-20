@@ -1,0 +1,398 @@
+#!/usr/bin/perl -w
+
+### This program replays the transactions that occurred between 'kmod' and the
+### servers. The program expects the path to the interactions log as its first
+### argument. You may optionally specify the address and port of the server to
+### contact in the second and third parameters (otherwise the log addresses and
+### ports are used). The program sends each input object to the servers and
+### validates that the objects returned by the servers match the objects
+### recorded in the log.
+
+
+############################################################
+use strict;
+use IO::Socket::SSL;
+use Math::BigInt;
+
+### Current script mode: input or output.
+my $MODE_INPUT = 1;
+my $MODE_OUTPUT = 2;
+my $current_mode = $MODE_INPUT;
+
+### Log file descriptor.
+my $log_fd;
+
+### If true, the server address and port information in the log is ignored.
+my $ignore_log_addr = 0;
+
+### Current server address and port.
+my $current_server_addr = "";
+my $current_server_port = 0;
+
+### Server connection.
+my $server_conn = undef;
+
+### Run the show.
+sub main
+{
+    if(@ARGV != 1 && @ARGV != 3)
+    {
+    	die("Usage: $0 <inter_log_path> [server_addr server_port]\n");
+    }
+    
+    if(@ARGV == 3)
+    {
+    	$ignore_log_addr = 1;
+    	$current_server_addr = $ARGV[1];
+	$current_server_port = $ARGV[2];
+    }
+    
+    ### Open log file.
+    open(INPUT_FILE, "<$ARGV[0]") || die("Cannot open $ARGV[0]: $!\n");
+    $log_fd = *INPUT_FILE{IO};
+   
+    ### Process the log.
+    process_log();
+}
+
+### This function processes the log file.
+sub process_log()
+{   
+    while(my $line = <$log_fd>)
+    {
+    	### Skip empty lines.
+	if ($line =~ /^\s*$/)
+	{
+	    next;
+	}
+	
+    	if($line =~ /^(\w+) version=(\d+),(\d+) type=(\d+),(\d+) len=(\d+) address=(.+) port=(\d+)>$/)
+	{   
+    	    if($1 eq "INPUT")
+	    {
+		$current_mode = $MODE_INPUT;
+	    }
+
+	    elsif($1 eq "OUTPUT")
+	    {
+		$current_mode = $MODE_OUTPUT;
+	    }
+
+	    else
+	    {
+		die("Expected INPUT or OUTPUT, got '$1'");
+	    }
+	    
+	    ### If the server information has changed, disconnect.
+	    if($current_mode == $MODE_INPUT && ! $ignore_log_addr &&
+	       ($current_server_addr ne $7 || $current_server_port != $8))
+	    {
+	    	$current_server_addr = $7;
+		$current_server_port = $8;
+		close_comm_with_server();
+	    }
+	    
+	    ### If we're processing a login command on input, disconnect.
+	    if($current_mode == $MODE_INPUT && $5 >= 10 && $5 < 20)
+	    {
+	    	close_comm_with_server();
+	    }
+	    
+	    ### If we're not connected, connect to the server.
+	    if(! defined($server_conn))
+	    {
+	    	 open_comm_with_server();
+	    }
+	    
+    	    #printf("Sending packet ($1, $2,$3, $4,$5, $6, $7, $8).\n");
+	    network_transfer("major version", pack_int(bigint_to_hex_string(Math::BigInt->new($2), 4)));
+	    network_transfer("minor version", pack_int(bigint_to_hex_string(Math::BigInt->new($3), 4)));
+	    network_transfer("command code", pack_int("8724" . sprintf("%2.2x", $4) . sprintf("%2.2x", $5)));
+	    
+	    ### Transfer the payload size on input.
+	    if ($current_mode == $MODE_INPUT)
+	    {
+	    	network_transfer("payload length", pack_int(bigint_to_hex_string(Math::BigInt->new($6), 4)));
+	    }
+	    
+	    ### Ignore the payload size on output.
+	    else
+	    {
+	    	my $read_data;
+		
+	    	if($server_conn->read($read_data, 4) != 4)
+		{
+		    die("Cannot receive payload size from the server: " . IO::Socket::SSL::errstr());
+		}
+	    }
+	    
+	    process_packet();
+	}
+
+	else
+	{
+	    chomp($line);
+    	    die("Expected packet header in log, got '$line'");
+	}
+    }
+}
+
+### This function processes a packet content in the log.
+sub process_packet
+{   
+    ### Read all the other packet lines.
+    while(1)
+    {
+    	my $line = read_log_line();
+	
+	### Empty line, we're done.
+	if ($line =~ /^\s*$/)
+	{
+	    last;
+	}
+	
+	### uint32.
+	elsif($line =~ /^uint32$/)
+	{
+	    my $nb = read_log_line();
+	    $nb =~ s/ //;
+	    network_transfer("uint32 ($nb)", pack_int("01" . bigint_to_hex_string(Math::BigInt->new($nb), 4)));
+	}
+	
+	### uint64.
+	elsif($line =~ /^uint64$/)
+	{
+	    my $nb = read_log_line();
+	    $nb =~ s/ //;
+	    network_transfer("uint64 ($nb)", pack_int("02" . bigint_to_hex_string(Math::BigInt->new($nb), 8)));
+	}
+	
+	### String.
+	elsif($line =~ /^string (\d+)$/)
+	{
+	    my $string = "";
+	    
+	    ### Skip the first space.
+	    read_one_byte($log_fd);
+	    
+	    ### Read the string content.
+	    for(my $i = 0; $i < $1; $i++)
+	    {
+	    	$string .= read_one_byte($log_fd);
+	    }
+	    
+    	    ### Skip the ending newline.
+	    read_one_byte($log_fd);
+	    
+	    ### Write the string on input.
+	    if($current_mode == $MODE_INPUT)
+	    {
+	    	network_transfer("string length $1 ($string)", pack_int("03" . bigint_to_hex_string(Math::BigInt->new($1), 4)));
+	    	network_transfer("string length $1 ($string)", $string);
+	    }
+	    
+	    ### On output, the string received may vary (e.g. for the encrypted body).
+	    else
+	    {   
+	    	### Read the string identifier.
+	    	network_transfer("incoming string identifier", pack_int("03"));
+		
+		### Read the string length.
+		my $read_data; 
+		
+		if($server_conn->read($read_data, 4) != 4)
+		{
+		    die("Cannot receive string length from the server: " . IO::Socket::SSL::errstr());
+		}
+		
+		### Read the string data.
+		my $string_len = hex(unpack_int($read_data));
+    	    			
+		if($string_len > 0 && $server_conn->read($read_data, $string_len) != $string_len)
+		{
+		    die("Cannot receive string data ($string_len) from the server: " . IO::Socket::SSL::errstr());
+		}
+	    }  
+	}
+	
+	### Oops.
+	else
+	{
+	    die("Unexpected line '$line' in packet");
+	}
+    }
+}
+
+### This function reads a log line either up to a newline or '>'.
+sub read_log_line
+{
+    my $buf = "";
+    
+    while(1)
+    {
+    	my $char = read_one_byte($log_fd);
+	
+	if($char eq '>' || $char eq "\n")
+	{
+	    return $buf;
+	}
+	
+	$buf .= $char;
+    }
+}
+
+### This function reads and returns one byte from the specified file
+### descriptor. It dies on error.
+sub read_one_byte
+    {
+    my $fd = $_[0];
+    my $byte;
+    
+    if(read($fd, $byte, 1) != 1)
+    {
+    	die("Cannot read data from descriptor '$fd': $!");
+    }
+    
+    return $byte;
+}
+
+### This function takes as argument a big int (not a string) and a length and
+### returns an hexadecimal string representing that number. The string will have
+### 2*length characters (thus representing a 'length' bytes number).
+sub bigint_to_hex_string
+{
+    my $bigint = $_[0];
+    my $len = $_[1];
+    my $buf = substr($bigint->as_hex(), 2);
+    
+    while(length($buf) < 2*$len)
+    {
+    	$buf = "0" . $buf;
+    }
+
+    return $buf;
+}
+
+### This function takes as argument a string with 2N characters representing an
+### hexadecimal integer and returns a NBO packed integer with N bytes. Note
+### that if 'N' is odd, '0' will be prepended.
+sub pack_int
+{
+    my $text = $_[0];
+    my $text_len = length($text);
+
+    if($text_len % 2)
+    {
+    	$text = "0" . $text;
+	$text_len++;
+    }
+    
+    my $int = "";
+    my $int_len = $text_len / 2;
+    
+    for(my $i = 0; $i < $int_len; $i++)
+    {
+    	my $hex_val = hex(substr($text, $i * 2, 2));
+	my $byte = pack("C", $hex_val);	
+    	$int = $int . $byte;
+    }
+
+    return $int;
+}
+
+### This function takes as argument a N bytes NBO integer and returns a 2N
+### characters string representing the integer in hexadecimal format.
+sub unpack_int
+{
+    my $int = $_[0];
+    my $int_len = length($int);
+    my $text = "";
+    
+    for(my $i = 0; $i < $int_len; $i++)
+    {
+    	my $byte = substr($int, $i, 1);
+	my $hex_val = sprintf("%2.2x", unpack("C", $byte));
+	$text = $text . $hex_val;
+    }
+    
+    return $text;
+}
+
+### This function reads and writes data to the server.
+### If $current_mode == $MODE_INPUT, the data is sent to the server.
+### If $current_mode == $MODE_OUTPUT, the data is received from the server
+### and validated.
+sub network_transfer
+{
+    my $desc = $_[0];
+    my $data = $_[1];
+    
+    ### Important: skip transfers of 0 byte, IO::Socket::SSL doesn't support
+    ### them correctly.
+    if(length($data) == 0)
+    {
+	#print("Skipping transfer of 0 byte.\n");
+    }
+    
+    elsif($current_mode == $MODE_INPUT)
+    {
+    	#printf("Writing %s (length %d)\n", unpack_int($data), length($data));
+	
+	if($server_conn->write($data, length($data)) != length($data))
+	{
+	    die("Cannot send '$desc' to the server: " . IO::Socket::SSL::errstr());
+	}
+    }
+    
+    else
+    {
+    	#printf("Reading %s (length %d)\n", unpack_int($data), length($data));
+	
+	my $read_data;
+	
+	if($server_conn->read($read_data, length($data)) != length($data))
+	{
+	    die("Cannot receive '$desc' from the server: " . IO::Socket::SSL::errstr());
+	}
+
+	if($read_data ne $data)
+	{
+	    printf("While receiving '$desc' from the server:\n");
+	    printf("Data expected: %s\n", unpack_int($data));
+	    printf("Data received: %s\n", unpack_int($read_data));
+	    exit(1);
+	}
+    }
+}
+
+### Connect to the server.
+sub open_comm_with_server
+{
+    #print("Connecting.\n");
+    
+    ### Open connection.
+    $server_conn = IO::Socket::SSL->new(PeerAddr => $current_server_addr,
+    	    	    	    	    	PeerPort => $current_server_port,
+					SSL_version => "SSLv3");
+    
+    if(! $server_conn)
+    {
+    	die("Cannot connect to server: " . IO::Socket::SSL::errstr());
+    }
+}
+
+### Close connection with the server if it is open.
+sub close_comm_with_server
+{
+    if(defined($server_conn))
+    {
+    	#print("Disconnecting.\n");
+    	close($server_conn);
+	$server_conn = undef;
+    }
+}
+
+
+############################################################
+main();
+

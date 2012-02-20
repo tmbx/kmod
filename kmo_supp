@@ -1,0 +1,40 @@
+# Supressions for KMO.
+{
+	Allocate dtv leak
+	Addrcheck,Memcheck:Leak
+	fun:*
+	fun:allocate_dtv
+}
+
+{
+	Allocate dtv leak
+	Addrcheck,Memcheck:Leak
+	fun:*
+	fun:*
+	fun:_dl_allocate_tls
+}
+
+{
+	AES_encrypt uninit
+	Addrcheck,Memcheck:Value4
+    	fun:AES_encrypt
+}
+
+{
+	Linker stuff value4
+	AddrCheck,Memcheck:Value4
+	obj:/lib/ld-2.3.6.so
+}
+
+{
+	Linker stuff cond.
+	AddrCheck,Memcheck:Cond
+	obj:/lib/ld-2.3.6.so
+}
+
+{
+	Linker stuff addr4.
+	AddrCheck,Memcheck:Addr4
+	obj:/lib/ld-2.3.6.so
+}
+
