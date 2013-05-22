@@ -6790,7 +6790,7 @@ int main(int argc, char **argv) {
 	    if (error) break;
 
 	    /* Create the Teambox directory if it doesn't exist. */
-	    error = kmod_creat_teambox_dir(&kc);
+	    error = kmod_create_teambox_dir(&kc);
 	    if (error) break;
 
 	    /* Open the logs. */
