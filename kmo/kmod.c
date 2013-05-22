@@ -590,7 +590,7 @@ static void kmod_sig_check_attachments(struct kmod_crypt_sig *self, karray *attc
     	kmocrypt_signature_check_attachments2(self->obj2, attch_array);
 }
 
-static int kmod_sig_get_ksn(struct kmod_crypt_sig *self, char **ksn, int *len) {
+static int kmod_sig_get_ksn(struct kmod_crypt_sig *self, char **ksn, size_t *len) {
     if (self->major == 1)
     	return kmocrypt_signature_get_ksn(self->obj1, ksn, len);
     else
@@ -5733,7 +5733,7 @@ static int kmod_lookup_rec_addr(struct kmod_context *kc) {
 	    buf[0] = 0;
 	    
 	    if (info->key_data.slen) {
-		sprintf(buf, "%llu", info->key_id);
+		sprintf(buf, "%lu", info->key_id);
 	    }
 	    
 	    k3p_write_cstr(k3p, buf);
