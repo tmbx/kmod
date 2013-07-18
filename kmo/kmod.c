@@ -5790,7 +5790,7 @@ static int kmod_validate_ticket(struct kmod_context *kc) {
 	/* Obtain the encryption key. */
 	kbuffer_clear(&payload);
 	knp_msg_write_uint64(&payload, key_id);
-	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY_BY_ID, &payload);
+	query = knp_query_new(KNP_CONTACT_EKS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY_BY_ID, &payload);
 	if (kmod_exec_query(query, kc, &error)) break;
 	
 	if (query->res_type != KNP_RES_GET_ENC_KEY_BY_ID) {
