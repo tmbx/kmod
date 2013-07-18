@@ -6673,7 +6673,7 @@ int main(int argc, char **argv) {
     do {
 	/* Parse the arguments. */
 	while (1) {
-	    int cmd = getopt(argc, argv, "C:p:l:k:d:m:a:hvDtz");
+	    int cmd = getopt(argc, argv, "C:p:l:k:d:m:a:hvDtz:");
 
 	    /* Error. */
 	    if (cmd == '?' || cmd == ':') {
