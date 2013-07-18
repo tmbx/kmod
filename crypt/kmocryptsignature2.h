@@ -93,7 +93,7 @@ int kmocrypt_signature_validate2(struct kmocrypt_signature2 *self, kmocrypt_pkey
 int kmocrypt_signature_contain2(struct kmocrypt_signature2 *self, int type);
 int kmocrypt_signature_check_hash2(struct kmocrypt_signature2 *self, int type, unsigned char *data, uint32_t len);
 void kmocrypt_signature_check_attachments2(struct kmocrypt_signature2 *self, karray *attch_array);
-int kmocrypt_signature_get_ksn2(struct kmocrypt_signature2 *self, char **ksn, int *len);
+int kmocrypt_signature_get_ksn2(struct kmocrypt_signature2 *self, char **ksn, size_t *len);
 int kmocrypt_signature_get_ip2(struct kmocrypt_signature2 *self, struct sockaddr *addr);
 int kmocrypt_signature_get_mail_client2(struct kmocrypt_signature2 *self, struct kmocrypt_mail_client2 *mailer);
 int kmocrypt_signature_has_symkey_for2(struct kmocrypt_signature2 *self, uint64_t mid);
