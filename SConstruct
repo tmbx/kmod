@@ -345,8 +345,9 @@ def get_kmod_target():
 	    if DEBUG_KOS_PORT != "":
 	    	cpp_defines.append("__DEBUG_KOS_PORT__=" + DEBUG_KOS_PORT);
 	
-	hg_rev = commands.getoutput('hg tip | head -n 1 | cut -d \' \' -f 4').rstrip();
-	cpp_defines.append("-DBUILD_ID='\"%s\"'" % hg_rev);
+        git_rev = commands.getoutput("git log -n 1 --pretty=oneline | cut -d ' ' -f 1").rstrip()
+                
+	cpp_defines.append("-DBUILD_ID='\"%s\"'" % git_rev);
 	cpp_defines.append("-D__KMOD__");
 	
 	env = BUILD_ENV.Copy();

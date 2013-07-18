@@ -71,7 +71,8 @@ struct knp_ssl_driver {
 /* This function creates and initializes a KNP query.
  * The login OTUT must be set manually if it's needed.
  */
-struct knp_query * knp_query_new(int contact, int login_type, int cmd_type, kbuffer *cmd_payload) {
+struct knp_query * knp_query_new(int contact, int login_type, int cmd_type, kbuffer *cmd_payload,
+                                 kstr *all_req_str) {
     struct knp_query *query = (struct knp_query *) kmo_calloc(sizeof(struct knp_query));
     query->contact = contact;
     kstr_init(&query->server_addr);
@@ -80,6 +81,8 @@ struct knp_query * knp_query_new(int contact, int login_type, int cmd_type, kbuf
     query->cmd_payload = cmd_payload;
     kmo_data_transfer_init(&query->transfer);
     query->transfer.driver = kmo_sock_driver;
+    kstr_assign_kstr(&query->all_req_str, all_req_str);
+
     return query;
 }
 
@@ -91,11 +94,12 @@ void knp_query_destroy(struct knp_query *self) {
     
     knp_query_disconnect(self);
     kstr_free(&self->server_addr);
+    kstr_free(&self->all_req_str);
     kstr_destroy(self->login_otut);
     kbuffer_destroy(self->res_payload);
     kstr_destroy(self->serv_error_msg);
     kmo_data_transfer_free(&self->transfer);
-    
+
     free(self);
 }
 
@@ -1051,8 +1055,14 @@ static int knp_query_connect(struct knp_query *self, struct knp_proto *knp) {
 	    kstr_assign_cstr(&self->server_addr, __DEBUG_KOS_ADDRESS__);
 	    if (ops_address || ous_address || ots_address || iks_address || eks_address) {}
 	    #else
+
+            /* This is the option to use a one-stop server for all
+               online service requests. */
+            if (self->all_req_str.slen > 0) {
+                kstr_assign_kstr(&self->server_addr, &self->all_req_str);
+            }
 	    
-	    if (knp->server_info->kos_use_proxy || knp->use_kpg) {
+	    else if (knp->server_info->kos_use_proxy || knp->use_kpg) {
 		switch (self->contact) {
 		    case KNP_CONTACT_KPS: kstr_assign_cstr(&self->server_addr, ops_address); break;
 		    case KNP_CONTACT_OPS: kstr_assign_cstr(&self->server_addr, ops_address); break;

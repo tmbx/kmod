@@ -793,7 +793,7 @@ void kmocrypt_signature_check_attachments2(struct kmocrypt_signature2 *self, kar
 /* This function extracts the KSN from the signature, if any.
  * This function sets the KMO error string. It returns -1 on failure.
  */
-int kmocrypt_signature_get_ksn2(struct kmocrypt_signature2 *self, char **ksn, int *len) {
+int kmocrypt_signature_get_ksn2(struct kmocrypt_signature2 *self, char **ksn, size_t *len) {
     if (! self->subpacket_array[KMO_SP_TYPE_KSN]) {
         kmo_seterror("No KSN subpacket in KSP");
         return -1;
