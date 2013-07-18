@@ -85,9 +85,13 @@ struct knp_query {
 
     /* SSL driver. */
     struct knp_ssl_driver *ssl_driver;
+
+    /* All request go through this server if this is set. */
+    kstr all_req_str;
 };
 
-struct knp_query * knp_query_new(int contact, int login_type, int cmd_type, kbuffer *cmd_payload);
+struct knp_query * knp_query_new(int contact, int login_type, int cmd_type, kbuffer *cmd_payload, 
+                                 kstr *all_req_str);
 void knp_query_destroy(struct knp_query *self);
 void knp_query_disconnect(struct knp_query *self);
 int knp_query_exec(struct knp_query *self, struct knp_proto *knp);

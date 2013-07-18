@@ -160,6 +160,9 @@ struct kmod_context {
     /* Encryption key lookup address, if any. */
     kstr enc_key_lookup_str;
 
+    /* Single address to use when contacting online services. */
+    kstr all_req_str;
+
     /* KMOD user mail database. */
     maildb *mail_db;
 
@@ -196,6 +199,7 @@ static void kmod_context_init(struct kmod_context *kc) {
     kstr_init(&kc->kryptiva_db_path);
     kstr_init(&kc->log_date);
     kstr_init(&kc->enc_key_lookup_str);
+    kstr_init(&kc->all_req_str);
     k3p_proto_init(&kc->k3p);
     kc->k3p.transfer.driver = kmo_sock_driver;
     kc->k3p.hub = &kc->hub;
@@ -219,6 +223,7 @@ static void kmod_context_free(struct kmod_context *kc) {
     kstr_free(&kc->kryptiva_db_path);
     kstr_free(&kc->log_date);
     kstr_free(&kc->enc_key_lookup_str);
+    kstr_free(&kc->all_req_str);
     if (kc->mail_db) maildb_destroy(kc->mail_db);
     k3p_proto_free(&kc->k3p);
     kstr_free(&kc->knp.kpg_addr);
@@ -1465,7 +1470,8 @@ static int kmod_get_user_info(struct kmod_context *kc) {
     /* Flush the current user info. */
     kmod_flush_user_info(kc);
     
-    query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_GET_USER_INFO, &empty_payload);
+    query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_GET_USER_INFO, &empty_payload,
+                          &kc->all_req_str);
     
     /* Try. */
     do {
@@ -2192,7 +2198,8 @@ static int kmod_eval_do_sig_key_query(struct kmod_context *kc, struct kmod_eval_
     kbuffer_clear(&state->payload);
     knp_msg_write_uint64(&state->payload, state->mail_info->mid);
     
-    query = knp_query_new(KNP_CONTACT_IKS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_SIGN_KEY, &state->payload);
+    query = knp_query_new(KNP_CONTACT_IKS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_SIGN_KEY, &state->payload,
+                          &kc->all_req_str);
     
     /* Try. */
     do {
@@ -3057,7 +3064,7 @@ static int kmod_process_do_sym_key_query(struct kmod_context *kc, int contact,
     knp_msg_write_kstr(&state->payload, &state->orig_mail->subject);
     if (state->want_dec_email) knp_msg_write_uint32(&state->payload, 1);
 
-    query = knp_query_new(contact, login_type, KNP_CMD_DEC_SYM_KEY, &state->payload);
+    query = knp_query_new(contact, login_type, KNP_CMD_DEC_SYM_KEY, &state->payload, &kc->all_req_str);
     
     /* Try. */
     do {
@@ -4128,7 +4135,7 @@ static int kmod_pkg_do_output_query(struct kmod_context *kc, struct kmod_pkg_sta
     kmod_log_msg(2, "kmod_pkg_do_output_query() called.\n");
     
     /* Contact the KPS or the OPS to package the mail. */
-    query = knp_query_new(contact, login_type, KNP_CMD_PACKAGE_MAIL, &state->payload);
+    query = knp_query_new(contact, login_type, KNP_CMD_PACKAGE_MAIL, &state->payload, &kc->all_req_str);
     
     if (login_type == KNP_CMD_LOGIN_OTUT) {
     	query->login_otut = kstr_new();
@@ -4458,7 +4465,8 @@ static int kmod_pkg_get_otut_string(struct kmod_context *kc, struct kmod_pkg_sta
     	knp_msg_write_uint32(&state->payload, pkg_pwd->nb_reply);
     }
     
-    query = knp_query_new(KNP_CONTACT_OTS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_OTUT_STRING, &state->payload);
+    query = knp_query_new(KNP_CONTACT_OTS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_OTUT_STRING, &state->payload, 
+                          &kc->all_req_str);
     
     /* Try. */
     do {
@@ -4535,7 +4543,8 @@ static int kmod_pkg_get_otut_ticket(struct kmod_context *kc, struct kmod_pkg_sta
     kbuffer_clear(&state->payload);
     knp_msg_write_uint32(&state->payload, state->nb_otut_reply);
     knp_msg_write_kstr(&state->payload, &state->orig_mail->from_addr);    
-    query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_GET_OTUT_TICKET, &state->payload);
+    query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_GET_OTUT_TICKET, &state->payload, 
+                          &kc->all_req_str);
     
     /* Try. */
     do {
@@ -4762,7 +4771,8 @@ static int kmod_pkg_do_rec_addr_query(struct kmod_context *kc, struct kmod_pkg_s
     
     assert(input_nb == (int) output_nb);
        
-    query = knp_query_new(contact, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY, &state->payload);
+    query = knp_query_new(contact, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY, &state->payload, 
+                          &kc->all_req_str);
     
     /* Try. */
     do {
@@ -5418,7 +5428,8 @@ static int kmod_get_kws_ticket(struct kmod_context *kc) {
 	}
 	
         /* Ask the KPS for a ticket. */
-	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_GET_KWS_TICKET, &payload);
+	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_GET_KWS_TICKET, &payload, 
+                              &kc->all_req_str);
 	if (kmod_exec_query(query, kc, &error)) break;
 	
 	if (query->res_type != KNP_RES_GET_KWS_TICKET) {
@@ -5486,7 +5497,8 @@ static int kmod_convert_exchange_address(struct kmod_context *kc) {
 	    knp_msg_write_kstr(&payload, in_array.data[i]);
 	}
 	
-	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_CONVERT_EXCHANGE, &payload);
+	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, KNP_CMD_CONVERT_EXCHANGE, &payload, 
+                              &kc->all_req_str);
 	if (kmod_exec_query(query, kc, &error)) break;
 	
 	if (query->res_type != KNP_RES_CONVERT_EXCHANGE) {
@@ -5599,7 +5611,8 @@ static int kmod_query_enc_addr(struct kmod_context *kc, karray *enc_array, int c
 	    knp_msg_write_kstr(&payload, &info->addr);
 	}
 	
-	query = knp_query_new(contact, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY, &payload);
+	query = knp_query_new(contact, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY, &payload, 
+                              &kc->all_req_str);
 	if (kmod_exec_query(query, kc, &error)) break;
 	
 	if (query->res_type != KNP_RES_GET_ENC_KEY) {
@@ -5790,7 +5803,8 @@ static int kmod_validate_ticket(struct kmod_context *kc) {
 	/* Obtain the encryption key. */
 	kbuffer_clear(&payload);
 	knp_msg_write_uint64(&payload, key_id);
-	query = knp_query_new(KNP_CONTACT_EKS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY_BY_ID, &payload);
+	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_ANON, KNP_CMD_GET_ENC_KEY_BY_ID, &payload, 
+                              &kc->all_req_str);
 	if (kmod_exec_query(query, kc, &error)) break;
 	
 	if (query->res_type != KNP_RES_GET_ENC_KEY_BY_ID) {
@@ -5890,7 +5904,8 @@ static int kmod_validate_otut(struct kmod_context *kc) {
 
 	    /* Ask the server about the OTUT string. */
 	    knp_msg_write_kstr(&payload, &entry_id_mail->otut_string);
-	    query = knp_query_new(KNP_CONTACT_OTS, KNP_CMD_LOGIN_ANON, KNP_CMD_VALIDATE_OTUT, &payload);
+	    query = knp_query_new(KNP_CONTACT_OTS, KNP_CMD_LOGIN_ANON, KNP_CMD_VALIDATE_OTUT, &payload,
+                                  &kc->all_req_str);
 
 	    error = knp_query_exec(query, &kc->knp);
 	    if (error) break;
@@ -5964,8 +5979,7 @@ static int kmod_login_test(struct kmod_context *kc) {
 	}
 	
 	/* Make a login-only query. */
-	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, 0, NULL);
-	
+	query = knp_query_new(KNP_CONTACT_KPS, KNP_CMD_LOGIN_USER, 0, NULL, &kc->all_req_str);
 	/* Perform a quick substitution and execute the query. */
 	kc->knp.server_info = &test_server_info;
 	error = knp_query_exec(query, &kc->knp);
@@ -6611,6 +6625,7 @@ static void kmod_print_usage(FILE *stream) {
 		    "-t               Trunk the logs at every request, to keep them small.\n"
 		    "-m               Set the timeout (in milliseconds) for the K3P and the KNP.\n"
 		    "-a <address>     Use the specified address to lookup encryption keys.\n"
+                    "-z <address>     Use the specified server for all KNP requests.\n"
 		    );
 }
 
@@ -6658,7 +6673,7 @@ int main(int argc, char **argv) {
     do {
 	/* Parse the arguments. */
 	while (1) {
-	    int cmd = getopt(argc, argv, "C:p:l:k:d:m:a:hvDt");
+	    int cmd = getopt(argc, argv, "C:p:l:k:d:m:a:hvDtz");
 
 	    /* Error. */
 	    if (cmd == '?' || cmd == ':') {
@@ -6746,6 +6761,10 @@ int main(int argc, char **argv) {
 	    else if (cmd == 'a') {
 		kstr_assign_cstr(&kc.enc_key_lookup_str, optarg);
 	    }
+
+            else if (cmd == 'z') {
+                kstr_assign_cstr(&kc.all_req_str, optarg);
+            }
 
 	    /* Out of args. */
 	    else if (cmd == -1)
